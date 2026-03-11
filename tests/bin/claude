@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import time
+
+
+def main() -> int:
+    line = sys.stdin.readline().rstrip("\n")
+    scenario = os.environ.get("TRAIL_TEST_SCENARIO")
+    if scenario == "streaming":
+        chunks = [
+            "✢Musing…\n",
+            "(thinking with high effort)\n",
+            "ANSWER:He\n",
+            "ANSWER:Hello world\n",
+        ]
+        for chunk in chunks:
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            time.sleep(0.02)
+        return 0
+    if scenario == "streaming_slow":
+        chunks = [
+            ("✢Musing…\n", 0.15),
+            ("ANSWER:He\n", 0.25),
+            ("ANSWER:Hello world\n", 0.6),
+        ]
+        for chunk, delay in chunks:
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            time.sleep(delay)
+        return 0
+    if scenario == "streaming_hold":
+        chunks = [
+            ("✢Musing…\n", 0.10),
+            ("ANSWER:He\n", 1.00),
+            ("ANSWER:Hello world\n", 0.10),
+        ]
+        for chunk, delay in chunks:
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            time.sleep(delay)
+        return 0
+    sys.stdout.write(f"ANSWER:{line}\n")
+    sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
