@@ -1,219 +1,89 @@
 # Trail
 
-> Session memory layer for AI CLI tools. Record, search, and replay your Claude Code / Codex conversations as searchable Markdown transcripts.
+> AI CLI 会话记忆层 — 把你和 Claude Code / Codex 的对话录下来，变成可搜索的 Markdown。
 
-**Trail** is a PTY wrapper that transparently records AI CLI sessions into `~/.trail/transcripts/`, making ephemeral terminal conversations persistent and searchable. Zero external dependencies — stdlib only.
+Trail 通过 PTY 包装透明录制 AI CLI 会话，持续写入 `~/.trail/transcripts/`。零外部依赖，纯 Python 标准库。
 
-- 🔍 Full-text search across all past sessions
-- 📝 Markdown transcripts organized by date
-- 🔒 Automatic secret redaction (API keys, tokens, passwords)
-- 🛠 `trail doctor` for installation health checks
-- 👀 `trail watch` for live session monitoring
-
----
-
-# Trail
-
-Trail 是一个面向 `Codex`、`Claude Code` 等 AI CLI 的会话记忆层：通过 PTY wrapper 显式代理交互会话，把本地会话稳定沉淀成 markdown transcript。它的核心不是做一个很重的产品层，而是把资料记录好，让人和 agent 都能直接读取 `~/.trail/transcripts/`。
-
-## 它解决什么问题
-
-如果你的终端主要在跑 AI CLI，普通 shell history 基本没用，因为它只能告诉你：
-
-- 你启动过 `codex`
-- 你启动过 `claude`
-
-但真正重要的信息在交互会话里：
-
-- 你到底问了什么
-- AI 当时怎么回的
-- 这轮对话发生在哪个 repo
-- 哪些 prompt 最终真的解决了问题
-
-Trail 要解决的是这部分“会话记忆”，不是命令历史增强。
-
-## 第一版范围
-
-第一版只做显式包装的 AI CLI 会话，不做全局终端监听，不做全桌面输入，不做 OCR，不做云同步，不做 GUI。
-
-这不是“暂时没做”，而是当前产品边界：
-
-- 不做全局终端监听
-- 不做 shell 级后台偷录
-- 不做桌面级输入捕获
-- 不把 Trail 扩成通用 terminal recorder
-
-MVP 包含：
-
-- `trail wrap codex`
-- `trail wrap claude`
-- PTY 代理运行
-- 记录会话元信息：
-  - `cwd`
-  - `repo`
-  - `branch`
-  - `started_at` / `ended_at`
-  - `tool`
-- 记录会话事件流：
-  - 用户提交后的 prompt
-  - 原始 `stdout` / `meta` 事件
-  - 基础时间线
-- 自动产出 markdown transcript：
-  - `~/.trail/transcripts/YYYY-MM-DD/<time>--<tool>--<session_id>.md`
-  - 活跃 session 期间持续更新，不必等会话结束
-  - frontmatter 带 `date` / `week` / `started_at` / `ended_at` / `last_synced_at`
-- `SQLite + FTS5`
-- CLI：
-  - `trail sessions`
-  - `trail search`
-  - `trail show`
-  - `trail watch`
-  - `trail rebuild`
-  - `trail reindex`
-  - `trail day`
-  - `trail doctor`
-  - `trail config`
-- 基础敏感信息打码
-
-## 为什么它不只是终端录制
-
-- 它是 `opt-in` 的 wrapper，不是后台偷录
-- 它关心的是 `AI CLI 会话`，不是所有终端程序
-- 它默认偏向记录“提交后的 prompt + 原始 AI 会话输出”，而不是逐键输入过程
-- 它把原始事件和结构化 transcript 分开存，方便重建
-- 它的目标是搜索、总结和 AI 复用，不是像素级回放
-
-一句话差异：
-
-`script 在录屏幕，Trail 在记会话。`
-
-## 明确不做
-
-下面这些方向当前明确不做：
-
-- 全局终端监听
-- 所有 shell 命令的统一录制
-- 非 AI CLI 程序的通用 TUI 抓取
-- 桌面输入法、辅助功能或系统级键盘事件采集
-
-原因也很直接：
-
-- 会破坏 `显式 opt-in` 的隐私模型
-- 会让 session 边界变得模糊
-- 会把大量非 AI 噪音混进存储层
-- 会把 Trail 从“AI CLI 会话记忆层”变成另一个产品
-
-## 当前技术判断
-
-v0 先用 `Python 3.9 + SQLite`，理由比之前更充分：
-
-- 本机现成可用
-- `pty`、`termios`、`select`、`signal`、`sqlite3` 都在标准库里
-- 做 PTY 代理、事件流记录和 CLI 足够快
-- 先把交互式 AI CLI 这个核心闭环做出来，比一开始追求语言优雅更重要
-
-如果产品成立，再考虑迁到单二进制栈。
-
-## 近期目标
-
-1. 跑通 `trail wrap codex/claude`
-2. 落会话表和事件表
-3. 记录用户输入块和 AI 输出块
-4. 跑通 `trail sessions` / `trail search` / `trail show`
-5. 做基础 prompt 搜索和日摘要
-
-## Transcript 主线
-
-Trail 现在的主线不是“实时过滤”，而是：
-
-1. 保留原始 `session_events`
-2. 会话过程中持续重建 `turns`
-3. 持续导出 markdown transcript
-4. parser 变好时，用 `rebuild` / `reindex` 重建 transcript
+## 安装
 
 ```bash
-trail rebuild <session_id>
-trail reindex --tool claude
-```
-
-对 agent 来说，最重要的接口就是目录本身：
-
-- `~/.trail/transcripts/`：主产物，agent 应优先读取
-- `~/.trail/sessions/`：原始 jsonl 证据流
-- `~/.trail/trail.db`：内部索引层，不是主接口
-
-如果你要做按天/按周复盘，最直接的输入就是：
-
-- `~/.trail/transcripts/YYYY-MM-DD/*.md`
-- markdown frontmatter 里的 `kind` / `schema_version` / `date` / `week` / `started_at` / `ended_at`
-
-## 实时观察
-
-`trail watch` 现在更偏向调试工具，不是核心使用路径。它可以实时看正在进行中的 session，但真正用来回顾和搜索的应该是 `show/search/day`。
-
-```bash
-trail watch --tool claude
-```
-
-它会等待一个匹配的活跃 session 出现，然后持续打印新增事件。也可以切到结构化视图：
-
-```bash
-trail watch --tool claude --mode turns
-trail watch <session_id> --mode turns
-```
-
-默认情况下，`watch` 会从 `~/.trail/config.json` 读取配置；没有配置文件时使用内置默认值。
-
-## 安装与配置
-
-最稳的冷启动方式：
-
-```bash
-git clone <your-trail-repo>
+git clone https://github.com/kaycexu/trail.git
 cd trail
 ./install.sh
 source ~/.zshrc
 ```
 
-`install.sh` 会做这几件事：
-
-- 把 `bin/trail` 链接到 `~/.local/bin/trail`
-- 在 `~/.zshrc` 写入 `claude` / `codex` wrapper
-- 初始化 `~/.trail/config.json`
-- 跑一遍 `trail doctor`
-
-之后你就按平常方式用：
+也可以用 pip：
 
 ```bash
-codex
-claude
+pip install -e ".[dev]"
 ```
 
-Trail 会自动把每个 session 持续写进本地 markdown。想自己看就直接打开：
+安装后正常使用 `claude` / `codex` 即可，Trail 自动在后台录制：
 
 ```bash
-~/.trail/transcripts/YYYY-MM-DD/*.md
+claude   # 自动被 trail 包装
+codex    # 同上
 ```
 
-开发时也可以直接这样跑：
+## 查看转录
+
+每次会话自动生成 Markdown 转录文件：
+
+```
+~/.trail/transcripts/
+  └── 2026-03-11/
+      └── 163022--claude--a1b2c3d4.md
+```
+
+## 常用命令
 
 ```bash
-python3 -m trail doctor
-python3 -m trail config init
-trail init zsh
+# 列出最近会话
+trail sessions
+
+# 搜索历史对话
+trail search "怎么部署"
+
+# 查看某次会话详情（支持 ID 前缀匹配）
+trail show a1b2c3d4
+
+# 今日汇总
+trail day
+
+# 实时观察进行中的会话
+trail watch --tool claude
+
+# 重建转录（parser 升级后）
+trail rebuild <session_id>
+trail reindex --tool claude
+
+# 检查安装状态
+trail doctor
+
+# 查看/修改配置
+trail config show
+trail config set watch.mode events
 ```
 
-- `trail doctor`：检查 `trail` / `claude` 是否在 `PATH`、Trail home 是否可用、`~/.zshrc` 是否已经接入包装函数。
-- `trail config show`：查看当前合并后的配置。
-- `trail config set watch.mode events`：修改默认 `watch` 行为。
-- `trail rebuild <session_id>`：用当前 parser 重新生成单次会话 transcript。
-- `trail reindex --tool claude`：批量重建 transcript。
+## 工作原理
+
+Trail 是一个 opt-in 的 PTY wrapper，不是后台监听。它只在你显式通过 `trail wrap` 或 shell alias 启动时才录制。
+
+录制的数据存在本地：
+- `~/.trail/transcripts/` — Markdown 转录（主接口）
+- `~/.trail/sessions/` — 原始事件流（JSONL）
+- `~/.trail/trail.db` — SQLite 索引 + FTS5 全文搜索
+
+敏感信息（API 密钥、令牌、密码）自动脱敏。
 
 ## 文档
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md)
-- [todo.md](./todo.md)
+- [架构设计](./ARCHITECTURE.md)
+- [转录格式](./TRANSCRIPT_SCHEMA.md)
+- [贡献指南](./CONTRIBUTING.md)
+- [变更日志](./CHANGELOG.md)
 
-## Transcript Schema
+## License
 
-Trail 的主接口是 markdown frontmatter，不是 JSON API。字段定义见 [TRANSCRIPT_SCHEMA.md](./TRANSCRIPT_SCHEMA.md)。agent 读取 transcript 时，应优先依赖 frontmatter + `## Transcript` 正文，不要依赖 CLI 输出格式。
+[MIT](./LICENSE)
