@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import logging
 import os
 import pty
 import select
@@ -18,6 +19,8 @@ from dataclasses import dataclass
 import fcntl
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger("trail.pty_runner")
 
 from trail.adapters import (
     should_capture_submitted_input_only,
@@ -120,7 +123,7 @@ class SessionLogger:
                 payload_meta=payload_meta,
             )
         except Exception as exc:
-            print(f"trail: warning: failed to store event: {exc}", file=sys.stderr)
+            log.warning("failed to store event: %s", exc)
 
 
 def _get_tty_winsize(fd: int) -> Optional[tuple[int, int]]:
@@ -150,6 +153,7 @@ def _write_all(fd: int, data: bytes) -> None:
 def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
     config = load_config()
     context = _build_context(tool, [tool, *tool_args])
+    log.debug("session start id=%s tool=%s cwd=%s", context.session_id, tool, context.cwd)
     argv_redacted = redact_sensitive_text(shlex.join(context.argv))
     submitted_input_only = bool(
         get_config_value(config, f"capture.submitted_input_only.{context.tool}", should_capture_submitted_input_only(context.tool))
@@ -188,10 +192,11 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
         except FileNotFoundError:
             os.write(2, f"trail: command not found: {tool}\n".encode())
             os._exit(127)
+    log.debug("pty fork child_pid=%d master_fd=%d", pid, master_fd)
     try:
         db.set_session_process(context.session_id, child_pid=pid)
     except Exception as exc:
-        print(f"trail: warning: failed to store child pid: {exc}", file=sys.stderr)
+        log.warning("failed to store child pid: %s", exc)
 
     bytes_in = 0
     bytes_out = 0
@@ -214,6 +219,7 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
 
     def on_terminate(signum, _frame) -> None:
         nonlocal terminate_requested
+        log.debug("received signal %s, forwarding to child pid=%d", signum, pid)
         terminate_requested = True
         try:
             os.kill(pid, signum)
@@ -358,6 +364,8 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
             payload_meta={"exit_code": exit_code},
             ts=ended_at,
         )
+        log.debug("session end id=%s exit_code=%d bytes_in=%d bytes_out=%d",
+                  context.session_id, exit_code, bytes_in, bytes_out)
         try:
             db.finish_session(
                 context.session_id,
@@ -367,11 +375,11 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
                 bytes_out=bytes_out,
             )
         except Exception as exc:
-            print(f"trail: warning: failed to finalize session: {exc}", file=sys.stderr)
+            log.warning("failed to finalize session: %s", exc)
         transcript_dirty = True
         try:
             sync_transcript(force=True)
         except Exception as exc:
-            print(f"trail: warning: failed to sync transcript: {exc}", file=sys.stderr)
+            log.warning("failed to sync transcript: %s", exc)
         logger.close()
     return exit_code

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from trail.paths import transcript_path
 from trail.redact import compact_text
+from trail.types import SessionRow
 
 TRANSCRIPT_SCHEMA_VERSION = "trail_session/v1"
 TRANSCRIPT_PARSER_REVISION = 2
 
 
-def write_session_markdown(session, turns, *, parser_revision: int = TRANSCRIPT_PARSER_REVISION) -> str:
+def write_session_markdown(session: SessionRow, turns: list[dict], *, parser_revision: int = TRANSCRIPT_PARSER_REVISION) -> str:
     path = transcript_path(session)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing_revision = _read_parser_revision(path)
@@ -19,7 +21,7 @@ def write_session_markdown(session, turns, *, parser_revision: int = TRANSCRIPT_
     return str(path)
 
 
-def render_session_markdown(session, turns, *, parser_revision: int = TRANSCRIPT_PARSER_REVISION) -> str:
+def render_session_markdown(session: SessionRow, turns: list[dict], *, parser_revision: int = TRANSCRIPT_PARSER_REVISION) -> str:
     synced_at = _now_iso()
     status = "completed" if session["ended_at"] else "active"
     session_date = _session_date(session["started_at"])
@@ -164,7 +166,7 @@ def _read_parser_revision(path) -> int | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    match = __import__("re").search(r"^parser_revision:\s*(\d+)\s*$", text, flags=__import__("re").MULTILINE)
+    match = re.search(r"^parser_revision:\s*(\d+)\s*$", text, flags=re.MULTILINE)
     if not match:
         return None
     return int(match.group(1))

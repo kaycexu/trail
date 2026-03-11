@@ -11,6 +11,13 @@ SENSITIVE_PATTERNS = [
     re.compile(r"(?i)\b((?:token|password|cookie|authorization|api[_-]?key)\s*=\s*)([^\s\"']+)"),
     re.compile(r"(?i)(--(?:token|password|cookie|authorization|api-key)\s+)([^\s]+)"),
     re.compile(r"(?i)(Bearer\s+)([A-Za-z0-9._\-+/=]+)"),
+    re.compile(r"()(sk-[a-zA-Z0-9]{20,})"),
+    re.compile(r"()(ghp_[a-zA-Z0-9]{36,})"),
+    re.compile(r"()(gho_[a-zA-Z0-9]{36,})"),
+    re.compile(r"()(ghs_[a-zA-Z0-9]{36,})"),
+    re.compile(r"()(xoxb-[a-zA-Z0-9-]+)"),
+    re.compile(r"()(xoxp-[a-zA-Z0-9-]+)"),
+    re.compile(r"()(xapp-[a-zA-Z0-9-]+)"),
 ]
 
 
@@ -30,8 +37,7 @@ def clean_text_for_storage(text: str, stream: str) -> str:
     redacted = redact_sensitive_text(text)
     cleaned = strip_ansi(redacted)
 
-    if stream != "stdin":
-        cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
 
     allowed = []
     for char in cleaned:

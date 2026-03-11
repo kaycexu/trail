@@ -7,6 +7,7 @@ from trail.adapters import extract_prompt_from_argv, postprocess_turns
 from trail.db import TrailDB
 from trail.markdown import write_session_markdown
 from trail.turns import extract_turns
+from trail.types import EventRow, SessionRow
 
 
 def extract_prompt_from_session(tool: str, argv_redacted: str) -> Optional[str]:
@@ -19,7 +20,7 @@ def extract_prompt_from_session(tool: str, argv_redacted: str) -> Optional[str]:
     return extract_prompt_from_argv(tool, argv[1:])
 
 
-def build_turns_for_session(session, events) -> list[dict]:
+def build_turns_for_session(session: SessionRow, events: list[EventRow]) -> list[dict]:
     initial_prompt = extract_prompt_from_session(session["tool"], session["argv_redacted"])
     turns = extract_turns(
         events,

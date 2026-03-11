@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
 from trail.paths import db_path, ensure_trail_home
+from trail.types import EventRow, SessionRow, TurnRow
+
+log = logging.getLogger("trail.db")
 
 
 def now_iso() -> str:
@@ -50,6 +56,7 @@ class TrailDB:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
         self._last_commit_time: float = time.monotonic()
+        log.debug("database opened path=%s", self.path)
         self._init_schema()
 
     def flush(self) -> None:
@@ -67,6 +74,7 @@ class TrailDB:
     def close(self) -> None:
         self.flush()
         self.conn.close()
+        log.debug("database closed path=%s", self.path)
 
     def _init_schema(self) -> None:
         self.conn.executescript(
@@ -135,14 +143,21 @@ class TrailDB:
         self._ensure_column("sessions", "child_pid", "INTEGER")
         self._ensure_column("sessions", "last_event_at", "TEXT")
         self.conn.commit()
+        log.debug("schema initialized")
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        _ident_re = re.compile(r"^[a-z_]+$")
+        if not _ident_re.match(table):
+            raise ValueError(f"Invalid table name: {table!r}")
+        if not _ident_re.match(column):
+            raise ValueError(f"Invalid column name: {column!r}")
         columns = {
             row[1]
             for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
         }
         if column in columns:
             return
+        log.debug("schema migration: adding column %s.%s", table, column)
         self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def create_session(self, *, session_id: str, tool: str, argv_redacted: str, cwd: str,
@@ -234,7 +249,7 @@ class TrailDB:
             self.flush()
         return event_id
 
-    def get_session_events(self, session_id: str) -> list[sqlite3.Row]:
+    def get_session_events(self, session_id: str) -> list[EventRow]:
         cursor = self.conn.execute(
             """
             SELECT *
@@ -247,63 +262,62 @@ class TrailDB:
         return cursor.fetchall()
 
     def replace_turns(self, session_id: str, turns: Iterable[dict]) -> None:
-        existing_ids = [
-            row["id"]
-            for row in self.conn.execute(
-                "SELECT id FROM turns WHERE session_id = ?",
+        # Commit any pending work so we can start a clean explicit transaction.
+        self.conn.commit()
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                "DELETE FROM turns_fts WHERE turn_id IN (SELECT id FROM turns WHERE session_id = ?)",
                 (session_id,),
-            ).fetchall()
-        ]
-        if existing_ids:
-            self.conn.executemany(
-                "DELETE FROM turns_fts WHERE turn_id = ?",
-                [(turn_id,) for turn_id in existing_ids],
             )
             self.conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
 
-        for turn in turns:
-            turn_id = str(uuid.uuid4())
-            self.conn.execute(
-                """
-                INSERT INTO turns (
-                    id, session_id, seq, role, text_redacted,
-                    started_at, ended_at, parser_version, confidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    turn_id,
-                    session_id,
-                    turn["seq"],
-                    turn["role"],
-                    turn["text_redacted"],
-                    turn["started_at"],
-                    turn["ended_at"],
-                    turn["parser_version"],
-                    turn["confidence"],
-                ),
-            )
-            self.conn.execute(
-                """
-                INSERT INTO turns_fts (turn_id, session_id, role, text_redacted)
-                VALUES (?, ?, ?, ?)
-                """,
-                (turn_id, session_id, turn["role"], turn["text_redacted"]),
-            )
-        self.conn.commit()
+            for turn in turns:
+                turn_id = str(uuid.uuid4())
+                self.conn.execute(
+                    """
+                    INSERT INTO turns (
+                        id, session_id, seq, role, text_redacted,
+                        started_at, ended_at, parser_version, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        turn_id,
+                        session_id,
+                        turn["seq"],
+                        turn["role"],
+                        turn["text_redacted"],
+                        turn["started_at"],
+                        turn["ended_at"],
+                        turn["parser_version"],
+                        turn["confidence"],
+                    ),
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO turns_fts (turn_id, session_id, role, text_redacted)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (turn_id, session_id, turn["role"], turn["text_redacted"]),
+                )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def list_sessions(self, *, limit: int = 20, tool: Optional[str] = None,
-                      repo: Optional[str] = None) -> list[sqlite3.Row]:
+                      repo: Optional[str] = None) -> list[SessionRow]:
         query, params = self._session_query(tool=tool, repo=repo)
         query += " ORDER BY started_at DESC LIMIT ?"
         params.append(limit)
         return self.conn.execute(query, params).fetchall()
 
-    def iter_sessions(self, *, tool: Optional[str] = None, repo: Optional[str] = None) -> list[sqlite3.Row]:
+    def iter_sessions(self, *, tool: Optional[str] = None, repo: Optional[str] = None) -> list[SessionRow]:
         query, params = self._session_query(tool=tool, repo=repo)
         query += " ORDER BY started_at ASC"
         return self.conn.execute(query, params).fetchall()
 
-    def get_session(self, session_id: str) -> Optional[sqlite3.Row]:
+    def get_session(self, session_id: str) -> Optional[SessionRow]:
         return self.conn.execute(
             "SELECT * FROM sessions WHERE id = ?",
             (session_id,),
@@ -315,7 +329,7 @@ class TrailDB:
         tool: Optional[str] = None,
         repo: Optional[str] = None,
         active_only: bool = False,
-    ) -> Optional[sqlite3.Row]:
+    ) -> Optional[SessionRow]:
         query, params = self._session_query(tool=tool, repo=repo)
         if active_only:
             query += " AND ended_at IS NULL"
@@ -328,14 +342,14 @@ class TrailDB:
         limit: int = 20,
         tool: Optional[str] = None,
         repo: Optional[str] = None,
-    ) -> list[sqlite3.Row]:
+    ) -> list[SessionRow]:
         query, params = self._session_query(tool=tool, repo=repo)
         query += " AND ended_at IS NULL"
         query += " ORDER BY COALESCE(last_event_at, started_at) DESC, started_at DESC LIMIT ?"
         params.append(limit)
         return self.conn.execute(query, params).fetchall()
 
-    def get_session_events_after(self, session_id: str, after_seq: int = 0) -> list[sqlite3.Row]:
+    def get_session_events_after(self, session_id: str, after_seq: int = 0) -> list[EventRow]:
         return self.conn.execute(
             """
             SELECT *
@@ -346,7 +360,7 @@ class TrailDB:
             (session_id, after_seq),
         ).fetchall()
 
-    def get_session_turns(self, session_id: str) -> list[sqlite3.Row]:
+    def get_session_turns(self, session_id: str) -> list[TurnRow]:
         return self.conn.execute(
             """
             SELECT *
@@ -359,7 +373,7 @@ class TrailDB:
 
     def search_turns(self, query_text: str, *, limit: int = 20, role: Optional[str] = None,
                      tool: Optional[str] = None, repo: Optional[str] = None,
-                     since: Optional[str] = None) -> list[sqlite3.Row]:
+                     since: Optional[str] = None) -> list[sqlite3.Row]:  # joined query, not a pure TurnRow
         query = """
             SELECT
                 turns.session_id,
@@ -393,15 +407,17 @@ class TrailDB:
         return self.conn.execute(query, params).fetchall()
 
     def day_summary(self, date_prefix: str) -> dict:
+        day_start = date_prefix
+        next_day = str(date.fromisoformat(date_prefix) + timedelta(days=1))
         rows = self.conn.execute(
             """
             SELECT tool, repo_root, COUNT(*) AS count
             FROM sessions
-            WHERE started_at LIKE ?
+            WHERE started_at >= ? AND started_at < ?
             GROUP BY tool, repo_root
             ORDER BY count DESC
             """,
-            (f"{date_prefix}%",),
+            (day_start, next_day),
         ).fetchall()
         total_sessions = sum(row["count"] for row in rows)
         tools: dict[str, int] = {}
@@ -414,11 +430,11 @@ class TrailDB:
             """
             SELECT role, text_redacted
             FROM turns
-            WHERE started_at LIKE ?
+            WHERE started_at >= ? AND started_at < ?
             ORDER BY started_at DESC
             LIMIT 10
             """,
-            (f"{date_prefix}%",),
+            (day_start, next_day),
         ).fetchall()
         return {
             "date": date_prefix,

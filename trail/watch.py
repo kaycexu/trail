@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
 import os
 import sys
 import time
@@ -10,6 +11,9 @@ from typing import Optional
 from trail.db import TrailDB
 from trail.parser import build_turns_for_session, extract_prompt_from_session
 from trail.redact import compact_text
+from trail.types import EventRow, SessionRow
+
+log = logging.getLogger("trail.watch")
 
 LEGACY_ACTIVE_GRACE_SECONDS = 15.0
 
@@ -49,19 +53,32 @@ def _resolve_session(
     *,
     tool: Optional[str],
     repo: Optional[str],
-) -> Optional[object]:
+    timeout: float = 60.0,
+) -> Optional[SessionRow]:
     if session_id:
+        log.debug("resolving explicit session_id=%s", session_id)
         return db.get_session(session_id)
 
+    log.debug("searching for live session tool=%s repo=%s timeout=%.1fs", tool, repo, timeout)
     waiting = False
-    while True:
-        session = _find_live_session(db, tool=tool, repo=repo)
-        if session is not None:
-            return session
-        if not waiting:
-            waiting = True
-            print("Waiting for a matching active session...")
-        time.sleep(0.5)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            session = _find_live_session(db, tool=tool, repo=repo)
+            if session is not None:
+                log.debug("resolved live session id=%s", session["id"])
+                return session
+            if time.monotonic() >= deadline:
+                log.debug("session resolution timed out after %.1fs", timeout)
+                print(f"No active session found within {timeout}s", file=sys.stderr)
+                return None
+            if not waiting:
+                waiting = True
+                print("Waiting for a matching active session...")
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nInterrupted while waiting for session.", file=sys.stderr)
+        return None
 
 
 def _find_live_session(
@@ -69,14 +86,14 @@ def _find_live_session(
     *,
     tool: Optional[str],
     repo: Optional[str],
-) -> Optional[object]:
+) -> Optional[SessionRow]:
     for session in db.list_active_sessions(limit=20, tool=tool, repo=repo):
         if _session_looks_live(session):
             return session
     return None
 
 
-def _session_looks_live(session) -> bool:
+def _session_looks_live(session: SessionRow) -> bool:
     child_pid = session["child_pid"]
     if child_pid is not None:
         return _pid_is_running(int(child_pid))
@@ -108,6 +125,7 @@ def _is_recent_timestamp(ts: str | None, *, within_seconds: float) -> bool:
 
 
 def _watch_events(db: TrailDB, session_id: str, *, poll_interval: float) -> int:
+    log.debug("watch_events session_id=%s poll_interval=%.2f", session_id, poll_interval)
     last_seq = 0
     saw_end = False
 
@@ -132,8 +150,11 @@ def _watch_events(db: TrailDB, session_id: str, *, poll_interval: float) -> int:
 
 
 def _watch_turns(db: TrailDB, session_id: str, *, poll_interval: float, settle_seconds: float) -> int:
+    log.debug("watch_turns session_id=%s poll=%.2f settle=%.2f", session_id, poll_interval, settle_seconds)
     printed: dict[int, str] = {}
     pending: dict[int, PendingTurn] = {}
+    last_event_count: int = -1
+    cached_turns: list[dict] = []
 
     while True:
         session = db.get_session(session_id)
@@ -141,9 +162,14 @@ def _watch_turns(db: TrailDB, session_id: str, *, poll_interval: float, settle_s
             print("Session disappeared.", file=sys.stderr)
             return 1
 
-        turns = _extract_live_turns(db, session)
+        events = db.get_session_events(session_id)
+        event_count = len(events)
+        if event_count != last_event_count:
+            last_event_count = event_count
+            cached_turns = build_turns_for_session(session, events)
+
         emissions, printed, pending = _compute_turn_emissions(
-            turns,
+            cached_turns,
             printed=printed,
             pending=pending,
             now=time.monotonic(),
@@ -210,11 +236,11 @@ def _compute_turn_emissions(
     return emissions, printed, pending
 
 
-def _extract_live_turns(db: TrailDB, session) -> list[dict]:
+def _extract_live_turns(db: TrailDB, session: SessionRow) -> list[dict]:
     return build_turns_for_session(session, db.get_session_events(session["id"]))
 
 
-def _print_event(event) -> None:
+def _print_event(event: EventRow) -> None:
     ts = event["ts"][11:19]
     if event["stream"] == "meta":
         if event["event_type"] == "start":

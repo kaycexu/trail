@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime
 
@@ -21,11 +22,13 @@ from trail.paths import transcript_path
 from trail.parser import rebuild_session_turns
 from trail.pty_runner import run_wrapped
 from trail.redact import compact_text
+from trail.types import TurnRow
 from trail.watch import watch_session
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="trail")
+    parser.add_argument("--debug", action="store_true", default=False, help="Enable debug logging to stderr.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     wrap_parser = subparsers.add_parser("wrap", help="Wrap a supported AI CLI in a PTY session.")
@@ -337,7 +340,7 @@ def _print_raw_events(db: TrailDB, session_id: str, *, limit: int | None = None)
             print(f"{indent}{line}")
 
 
-def _session_preview(turns) -> str:
+def _session_preview(turns: list[TurnRow]) -> str:
     if not turns:
         return ""
     for turn in turns:
@@ -367,6 +370,14 @@ def _format_session_duration(started_at: str, ended_at: str | None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser, args = parse_argv(argv)
+
+    if args.debug:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+            stream=sys.stderr,
+        )
+
     config = load_config()
 
     if args.command == "init":

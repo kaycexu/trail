@@ -10,6 +10,7 @@ from trail.claude_heuristics import (
     start_debug_block_depth,
 )
 from trail.redact import compact_text
+from trail.types import EventRow
 
 PARSER_VERSION = "v0-heuristic"
 CLAUDE_PARSER_VERSION = "v0-claude"
@@ -28,7 +29,7 @@ def _collapse_inline_text(text: str) -> str:
 
 
 def extract_turns(
-    events,
+    events: list[EventRow],
     tool: str | None = None,
     initial_user_text: str | None = None,
     initial_user_started_at: str | None = None,
@@ -47,7 +48,7 @@ def extract_turns(
 
 
 def _extract_generic_turns(
-    events,
+    events: list[EventRow],
     initial_user_text: str | None = None,
     initial_user_started_at: str | None = None,
 ) -> list[dict]:
@@ -68,8 +69,8 @@ def _extract_generic_turns(
                     "seq": seq,
                     "role": "user",
                     "text_redacted": compact_text(text, limit=4000),
-                    "started_at": initial_user_started_at or events[0]["ts"],
-                    "ended_at": initial_user_started_at or events[0]["ts"],
+                    "started_at": initial_user_started_at or (events[0]["ts"] if events else ""),
+                    "ended_at": initial_user_started_at or (events[0]["ts"] if events else ""),
                     "parser_version": "v0-argv",
                     "confidence": 0.95,
                 }
@@ -151,7 +152,7 @@ def _extract_generic_turns(
 
 
 def _extract_claude_turns(
-    events,
+    events: list[EventRow],
     initial_user_text: str | None = None,
     initial_user_started_at: str | None = None,
 ) -> list[dict]:
@@ -175,8 +176,8 @@ def _extract_claude_turns(
                     "seq": seq,
                     "role": "user",
                     "text_redacted": compact_text(text, limit=4000),
-                    "started_at": initial_user_started_at or events[0]["ts"],
-                    "ended_at": initial_user_started_at or events[0]["ts"],
+                    "started_at": initial_user_started_at or (events[0]["ts"] if events else ""),
+                    "ended_at": initial_user_started_at or (events[0]["ts"] if events else ""),
                     "parser_version": "v0-argv",
                     "confidence": 0.95,
                 }

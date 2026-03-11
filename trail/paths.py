@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from trail.types import SessionRow
 
 
 def trail_home() -> Path:
@@ -19,7 +23,7 @@ def transcripts_dir() -> Path:
     return trail_home() / "transcripts"
 
 
-def transcript_path(session) -> Path:
+def transcript_path(session: SessionRow) -> Path:
     day = (session["started_at"] or "unknown-date")[:10]
     clock = "unknown-time"
     if session["started_at"] and len(session["started_at"]) >= 19:
