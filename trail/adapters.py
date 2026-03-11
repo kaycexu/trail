@@ -3,15 +3,19 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from trail.redact import redact_sensitive_text
-from trail.turns import extract_claude_output_chunks, is_claude_noise_line
-
-DEBUG_LOG_LINE_RE = re.compile(r"^\[(?:log_[^\]]+|DEBUG)\b", re.IGNORECASE)
-DEBUG_LOG_BLOCK_START_RE = re.compile(r"^\[log_[^\]]+\]\s+response start\s*\{", re.IGNORECASE)
-DEBUG_LOG_STRUCTURED_LINE_RE = re.compile(
-    r"^(?:url|status|headers|body|error|request[-_ ]id|model|usage|type|message|stop_reason)\s*:",
-    re.IGNORECASE,
+from trail.claude_heuristics import (
+    CJK_RE,
+    CLAUDE_FRAGMENT_STEMS_EXTENDED,
+    advance_debug_block_depth,
+    is_claude_action_line,
+    is_claude_fragment_noise_line,
+    is_claude_noise_line,
+    is_debug_log_line,
+    start_debug_block_depth,
 )
+from trail.redact import redact_sensitive_text
+from trail.turns import extract_claude_output_chunks
+
 INLINE_STATUS_WORDS = (
     "Hatching",
     "Sketching",
@@ -48,7 +52,6 @@ INLINE_BREAK_RE = re.compile(
     rf"\(?thought\s+for\s+\d+[smh]"
     rf"))"
 )
-CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 COMMAND_NOISE_RE = re.compile(
     r"(?:^|[\s;])(?:ls|cat|find|rg|grep|git|python3?|bash|sed|awk|head|tail|pwd|cd|mkdir|cp|mv|rm)\b|"
     r"/Users/|2>/dev/null",
@@ -86,7 +89,6 @@ LEADING_TIP_SEGMENT_RE = re.compile(
     r"^(?:⎿\s*)?Tip:\s+Use\s+/btw\b.*?(?:(?=[\u4e00-\u9fff])|$)",
     re.IGNORECASE,
 )
-INLINE_NOISE_STEMS = ("ima", "imag", "buro", "burrow", "vib", "hash", "swoop", "meta", "cogit", "undulat", "/btw", "thought for")
 INLINE_NOISE_FRAGMENTS = (
     "Plugin updated:",
     "Restart to apply",
@@ -294,23 +296,15 @@ def _clean_claude_assistant_text(text: str) -> str:
 
 
 def _is_debug_log_line(line: str) -> bool:
-    stripped = line.strip()
-    if DEBUG_LOG_LINE_RE.match(stripped):
-        return True
-    if DEBUG_LOG_STRUCTURED_LINE_RE.match(stripped):
-        return True
-    return False
+    return is_debug_log_line(line)
 
 
 def _start_debug_block_depth(line: str) -> int:
-    if DEBUG_LOG_BLOCK_START_RE.match(line):
-        return max(1, line.count("{") - line.count("}"))
-    return 0
+    return start_debug_block_depth(line)
 
 
 def _advance_debug_block_depth(depth: int, line: str) -> int:
-    next_depth = depth + line.count("{") - line.count("}")
-    return max(0, next_depth)
+    return advance_debug_block_depth(depth, line)
 
 
 def _strip_inline_noise_segments(line: str) -> str:
@@ -350,7 +344,7 @@ def _looks_like_inline_noise(text: str) -> bool:
         return True
     if any(fragment.lower() in collapsed for fragment in INLINE_NOISE_FRAGMENTS):
         return True
-    if any(stem in collapsed for stem in INLINE_NOISE_STEMS):
+    if any(stem in collapsed for stem in CLAUDE_FRAGMENT_STEMS_EXTENDED):
         return True
     words = re.findall(r"[a-z]+", collapsed)
     if words and len(words) <= 6 and len("".join(words)) <= 24:
@@ -359,58 +353,7 @@ def _looks_like_inline_noise(text: str) -> bool:
 
 
 def _is_claude_action_line(line: str) -> bool:
-    stripped = " ".join(line.split()).strip()
-    if not stripped:
-        return True
-    if stripped.startswith("⎿"):
-        return True
-    if re.match(
-        r"^(?:ls|cat|find|rg|grep|git|python3?|bash|sed|awk|head|tail|pwd|cd|mkdir|cp|mv|rm)\b.*(?:/|~/|2>/|;\s*| -[A-Za-z])",
-        stripped,
-    ):
-        return True
-    prefixes = (
-        "Fetch(",
-        "Read(",
-        "Write(",
-        "Edit(",
-        "Search(",
-        "Grep(",
-        "Glob(",
-        "Bash(",
-        "Create file",
-        "Do you want to",
-        "Yes, allow all edits",
-        "Opened changes in Visual Studio Code",
-        "Opened changes in Cursor",
-        "Opened changes in VS Code",
-        "Save file to continue",
-        "Claude needs your permission to use",
-        "No, exit",
-        "Esc to cancel",
-        "Tab to amend",
-        "Received",
-        "Fetching",
-        "Wrote ",
-        "Tip: Use /btw",
-    )
-    if stripped.startswith(prefixes):
-        return True
-    if re.match(r"^Wrote\s+\d+\s+lines\s+to\s+", stripped):
-        return True
-    if re.match(r"^\(?thought\s+for\s+\d+[sm]", stripped, flags=re.IGNORECASE):
-        return True
-    if re.match(r"^(?:1|2|3)\.\s+(?:Yes|No)", stripped):
-        return True
-    if re.match(r"^\d+\.$", stripped):
-        return True
-    if "(shift+tab)" in stripped or "shift+tab" in stripped.lower():
-        return True
-    if stripped.startswith("[38;2;") or "[38;2;" in stripped:
-        return True
-    if stripped.startswith("38;2;"):
-        return True
-    return False
+    return is_claude_action_line(line, extended=True)
 
 
 def _is_claude_fragment_line(line: str) -> bool:
@@ -420,15 +363,11 @@ def _is_claude_fragment_line(line: str) -> bool:
     lowered = stripped.lower()
     if lowered == "main":
         return True
-    if "/btw" in lowered:
+    # Delegate core fragment detection to the shared heuristic.
+    if is_claude_fragment_noise_line(line):
         return True
-    if re.search(r"thought\s+for\s+\d+[sm]", lowered):
-        return True
-    if "thinking with high efort" in lowered or "thinking with high effort" in lowered:
-        return True
-    if any(stem in lowered for stem in INLINE_NOISE_STEMS):
-        if "…" in stripped or len(lowered) <= 40:
+    # Extended check: noise stems with ellipsis or short length.
+    if any(stem in lowered for stem in CLAUDE_FRAGMENT_STEMS_EXTENDED):
+        if "\u2026" in stripped or len(lowered) <= 40:
             return True
-    if lowered.startswith("main ") and ("ima" in lowered or "imag" in lowered):
-        return True
     return False

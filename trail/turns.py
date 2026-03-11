@@ -2,77 +2,18 @@ from __future__ import annotations
 
 import re
 
+from trail.claude_heuristics import (
+    advance_debug_block_depth,
+    is_claude_action_line,
+    is_claude_noise_line,
+    is_debug_log_line,
+    start_debug_block_depth,
+)
 from trail.redact import compact_text
 
 PARSER_VERSION = "v0-heuristic"
 CLAUDE_PARSER_VERSION = "v0-claude"
 RESIDUAL_STYLE_RE = re.compile(r"\[[0-9;?]*[A-Za-z]")
-ANSI_FRAGMENT_RE = re.compile(r"^\[[0-9;?;]+$")
-STATUS_TOKEN_SPLIT_RE = re.compile(r"[^a-z]+")
-DEBUG_LOG_LINE_RE = re.compile(r"^\[(?:log_[^\]]+|DEBUG)\b", re.IGNORECASE)
-DEBUG_LOG_BLOCK_START_RE = re.compile(r"^\[log_[^\]]+\]\s+response start\s*\{", re.IGNORECASE)
-DEBUG_LOG_STRUCTURED_LINE_RE = re.compile(
-    r"^(?:url|status|headers|body|error|request[-_ ]id|model|usage|type|message|stop_reason)\s*:",
-    re.IGNORECASE,
-)
-CLAUDE_FRAGMENT_STEMS = ("ima", "imag", "buro", "burrow", "vib", "hash", "swoop", "meta", "cogit", "undulat")
-
-CLAUDE_STATUS_WORDS = {
-    "thinking",
-    "with",
-    "high",
-    "effort",
-    "musing",
-    "gallivanting",
-    "hatching",
-    "sketching",
-    "precipitating",
-    "pondering",
-    "reasoning",
-    "analyzing",
-    "analysing",
-    "planning",
-    "searching",
-    "reading",
-    "writing",
-    "working",
-    "updating",
-    "vibing",
-    "metamorphosing",
-    "hashing",
-    "swooping",
-    "imagining",
-    "undulating",
-    "cogitated",
-    "burrowing",
-    "plan",
-}
-CLAUDE_CORE_STATUS_WORDS = {
-    "thinking",
-    "musing",
-    "gallivanting",
-    "hatching",
-    "sketching",
-    "precipitating",
-    "pondering",
-    "reasoning",
-    "analyzing",
-    "analysing",
-    "planning",
-    "searching",
-    "reading",
-    "writing",
-    "working",
-    "updating",
-    "vibing",
-    "metamorphosing",
-    "hashing",
-    "swooping",
-    "imagining",
-    "undulating",
-    "cogitated",
-    "burrowing",
-}
 
 
 def _normalize_output(text: str) -> str:
@@ -354,11 +295,11 @@ def extract_claude_output_chunks(payload: str, last_user_text: str | None) -> li
             continue
 
         if debug_block_depth:
-            debug_block_depth = _advance_debug_block_depth(debug_block_depth, raw_compact)
+            debug_block_depth = advance_debug_block_depth(debug_block_depth, raw_compact)
             continue
 
-        if _is_claude_debug_log_line(raw_compact):
-            debug_block_depth = _start_debug_block_depth(raw_compact)
+        if is_debug_log_line(raw_compact):
+            debug_block_depth = start_debug_block_depth(raw_compact)
             continue
 
         line = RESIDUAL_STYLE_RE.sub("", raw_line)
@@ -478,182 +419,4 @@ def _matches_prompt_echo(line: str, prompt: str) -> bool:
 
 
 def _is_claude_action_line(line: str) -> bool:
-    stripped = " ".join(line.split()).strip()
-    if not stripped:
-        return False
-    prefixes = (
-        "Fetch(",
-        "Read(",
-        "Write(",
-        "Edit(",
-        "Search(",
-        "Grep(",
-        "Glob(",
-        "Bash(",
-        "Create file",
-        "Do you want to",
-        "Yes, allow all edits",
-        "Opened changes in Visual Studio Code",
-        "Opened changes in Cursor",
-        "Opened changes in VS Code",
-        "Save file to continue",
-        "Claude needs your permission to use",
-        "Received",
-        "Fetching",
-        "Wrote ",
-    )
-    if stripped.startswith(prefixes):
-        return True
-    if re.match(r"^Wrote\s+\d+\s+lines?\s+to\s+", stripped):
-        return True
-    if re.match(r"^(?:1|2|3)\.\s+(?:Yes|No)", stripped):
-        return True
-    return False
-
-
-def is_claude_noise_line(line: str) -> bool:
-    raw_line = line.strip()
-    collapsed = "".join(raw_line.split())
-    if _is_claude_debug_log_line(raw_line):
-        return True
-    patterns = (
-        "ClaudeCodev",
-        "Tips for getting",
-        "Welcome back",
-        "Run /init to create",
-        "Recent activity",
-        "/resume for more",
-        "Reply with ex",
-        "plan mode on",
-        "plan mode on",
-        "shift+tabtocycle",
-        "shift+tab to cycle",
-        "esc to interrupt",
-        "esctointerrupt",
-        "ctrl+g to edit",
-        "Checking for updates",
-        "Checking for updates",
-        "Claude in Chrome requires",
-        "MCP servers failed",
-        "MCP servers need auth",
-        "MCP server needs auth",
-        "/mcp",
-        "Precipitating",
-        "running stop hook",
-        "/exit Exit the REPL",
-        "Resume this session with:",
-        "/data-context-extractor",
-        "/interface-design:extract",
-        "APIUsageBilling",
-        "TapTapPteLtd",
-        "Exit the REPL",
-        "Press Ctrl-C again to exit",
-        "Resume this session with:",
-        "Opened changes in Visual Studio Code",
-        "Opened changes in Cursor",
-        "Opened changes in VS Code",
-        "Save file to continue",
-        "Claude needs your permission to use",
-        "accept edits on",
-        "bypass permissions on",
-        "ctrl+o to expand",
-        "ctrl+o to expand",
-        "?forshortcuts",
-        "? for shortcuts",
-        "?for",
-        "shortcuts",
-        "No recent activity",
-        "Hatching…",
-        "Hatching",
-        "Sketching…",
-        "Sketching",
-        "Musing…",
-        "Musing",
-        "Gallivanting…",
-        "Gallivanting",
-        "thinking with high effort",
-        "thought for",
-        "Tip: Use /btw",
-        "Burrowing…",
-        "Burrowing",
-        "(thinking with high effort)",
-        "chng",
-        "ethi",
-        "⎿Done(",
-        "tooluses",
-    )
-    if any(pattern in raw_line or "".join(pattern.split()) in collapsed for pattern in patterns):
-        return True
-    if _is_claude_status_line(raw_line):
-        return True
-    if _is_claude_fragment_noise_line(raw_line):
-        return True
-    if ANSI_FRAGMENT_RE.match(raw_line):
-        return True
-    if raw_line.startswith("❯"):
-        return True
-    if raw_line.startswith("claude --resume "):
-        return True
-    if re.match(r"^\d+\.\s+(?:Yes|No)\b", raw_line):
-        return True
-    if "────────────────" in raw_line:
-        return True
-    if any(char in raw_line for char in "╭╰│▐▛▜▘▝"):
-        return True
-    if raw_line.startswith("/"):
-        return True
-    if set(raw_line) <= {"·", "✢", "✳", "✶", "✻", "*", "P", "r", "e", "c", "i", "p", "t", "a", "n", "g", "…"}:
-        return True
-    if set(raw_line) <= {"─", "�", "-", "_", " "}:
-        return True
-    return False
-
-
-def _is_claude_status_line(line: str) -> bool:
-    normalized = line.lower().replace("…", " ")
-    normalized = re.sub(r"\d+", " ", normalized)
-    tokens = [token for token in STATUS_TOKEN_SPLIT_RE.split(normalized) if token]
-    if not tokens:
-        return False
-    if not any(token in CLAUDE_CORE_STATUS_WORDS for token in tokens):
-        return False
-    return all(token in CLAUDE_STATUS_WORDS for token in tokens)
-
-
-def _is_claude_fragment_noise_line(line: str) -> bool:
-    raw_line = line.strip()
-    if not raw_line or re.search(r"[\u4e00-\u9fff]", raw_line):
-        return False
-    collapsed = " ".join(raw_line.split()).lower()
-    if "/btw" in collapsed:
-        return True
-    if re.search(r"thought\s+for\s+\d+[sm]", collapsed):
-        return True
-    if "thinking with high efort" in collapsed or "thinking with high effort" in collapsed:
-        return True
-    if any(stem in collapsed for stem in CLAUDE_FRAGMENT_STEMS):
-        if "…" in raw_line or len(collapsed) <= 40:
-            return True
-    if collapsed.startswith("main ") and ("ima" in collapsed or "imag" in collapsed):
-        return True
-    return False
-
-
-def _is_claude_debug_log_line(line: str) -> bool:
-    stripped = line.strip()
-    if DEBUG_LOG_LINE_RE.match(stripped):
-        return True
-    if DEBUG_LOG_STRUCTURED_LINE_RE.match(stripped):
-        return True
-    return False
-
-
-def _start_debug_block_depth(line: str) -> int:
-    if DEBUG_LOG_BLOCK_START_RE.match(line):
-        return max(1, line.count("{") - line.count("}"))
-    return 0
-
-
-def _advance_debug_block_depth(depth: int, line: str) -> int:
-    next_depth = depth + line.count("{") - line.count("}")
-    return max(0, next_depth)
+    return is_claude_action_line(line, extended=False)

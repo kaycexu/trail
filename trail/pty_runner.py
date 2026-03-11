@@ -109,15 +109,18 @@ class SessionLogger:
         }
         self.handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self.handle.flush()
-        self.db.add_event(
-            session_id=self.context.session_id,
-            seq=self.seq,
-            stream=stream,
-            event_type=event_type,
-            ts=event_ts,
-            payload_text_redacted=payload_text,
-            payload_meta=payload_meta,
-        )
+        try:
+            self.db.add_event(
+                session_id=self.context.session_id,
+                seq=self.seq,
+                stream=stream,
+                event_type=event_type,
+                ts=event_ts,
+                payload_text_redacted=payload_text,
+                payload_meta=payload_meta,
+            )
+        except Exception as exc:
+            print(f"trail: warning: failed to store event: {exc}", file=sys.stderr)
 
 
 def _get_tty_winsize(fd: int) -> Optional[tuple[int, int]]:
@@ -185,7 +188,10 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
         except FileNotFoundError:
             os.write(2, f"trail: command not found: {tool}\n".encode())
             os._exit(127)
-    db.set_session_process(context.session_id, child_pid=pid)
+    try:
+        db.set_session_process(context.session_id, child_pid=pid)
+    except Exception as exc:
+        print(f"trail: warning: failed to store child pid: {exc}", file=sys.stderr)
 
     bytes_in = 0
     bytes_out = 0
@@ -214,6 +220,33 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
         except OSError:
             pass
 
+    def safe_waitpid(blocking: bool = False) -> Optional[int]:
+        """Call os.waitpid for *pid* at most once.
+
+        Returns the exit code if the child was (or had already been) reaped,
+        or None if a non-blocking poll found the child still running.
+
+        After a successful reap the *waited* flag is set so subsequent calls
+        are no-ops that return the previously captured exit code.
+        """
+        nonlocal waited, exit_code
+        if waited:
+            return exit_code
+        try:
+            flags = 0 if blocking else os.WNOHANG
+            done_pid, status = os.waitpid(pid, flags)
+        except (ChildProcessError, OSError):
+            # Child already reaped by someone else (shouldn't happen now,
+            # but guard defensively).
+            waited = True
+            return exit_code
+        if done_pid == pid:
+            waited = True
+            exit_code = os.waitstatus_to_exitcode(status)
+            return exit_code
+        # WNOHANG and child still running
+        return None
+
     def sync_transcript(*, force: bool = False) -> None:
         nonlocal transcript_dirty, last_transcript_sync
         now = time.monotonic()
@@ -239,10 +272,7 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
 
         while True:
             if terminate_requested:
-                done_pid, status = os.waitpid(pid, os.WNOHANG)
-                if done_pid == pid:
-                    waited = True
-                    exit_code = os.waitstatus_to_exitcode(status)
+                if safe_waitpid(blocking=False) is not None:
                     break
             if resize_pending and interactive:
                 resize_pending = False
@@ -302,22 +332,16 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
                         )
                         transcript_dirty = True
                 else:
-                    _, status = os.waitpid(pid, 0)
-                    waited = True
-                    exit_code = os.waitstatus_to_exitcode(status)
+                    safe_waitpid(blocking=True)
                     break
 
-            done_pid, status = os.waitpid(pid, os.WNOHANG)
-            if done_pid == pid:
-                waited = True
-                exit_code = os.waitstatus_to_exitcode(status)
+            if safe_waitpid(blocking=False) is not None:
                 if master_fd not in ready:
                     break
             sync_transcript(force=False)
     finally:
         if not waited:
-            _, status = os.waitpid(pid, 0)
-            exit_code = os.waitstatus_to_exitcode(status)
+            safe_waitpid(blocking=True)
         if interactive and original_tty_state is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, original_tty_state)
         if previous_sigwinch is not None:
@@ -334,14 +358,20 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
             payload_meta={"exit_code": exit_code},
             ts=ended_at,
         )
-        db.finish_session(
-            context.session_id,
-            ended_at=ended_at,
-            exit_code=exit_code,
-            bytes_in=bytes_in,
-            bytes_out=bytes_out,
-        )
+        try:
+            db.finish_session(
+                context.session_id,
+                ended_at=ended_at,
+                exit_code=exit_code,
+                bytes_in=bytes_in,
+                bytes_out=bytes_out,
+            )
+        except Exception as exc:
+            print(f"trail: warning: failed to finalize session: {exc}", file=sys.stderr)
         transcript_dirty = True
-        sync_transcript(force=True)
+        try:
+            sync_transcript(force=True)
+        except Exception as exc:
+            print(f"trail: warning: failed to sync transcript: {exc}", file=sys.stderr)
         logger.close()
     return exit_code

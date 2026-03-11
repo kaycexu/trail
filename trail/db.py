@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,8 @@ class SessionRecord:
 
 
 class TrailDB:
+    _FLUSH_INTERVAL = 0.5  # seconds between auto-commits
+
     def __init__(self, path=None) -> None:
         if path is None:
             ensure_trail_home()
@@ -46,9 +49,23 @@ class TrailDB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
+        self._last_commit_time: float = time.monotonic()
         self._init_schema()
 
+    def flush(self) -> None:
+        """Force a commit of any pending writes and reset the flush timer."""
+        self.conn.commit()
+        self._last_commit_time = time.monotonic()
+
+    def __enter__(self) -> "TrailDB":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        self.close()
+        return False
+
     def close(self) -> None:
+        self.flush()
         self.conn.close()
 
     def _init_schema(self) -> None:
@@ -213,7 +230,8 @@ class TrailDB:
             "UPDATE sessions SET last_event_at = ? WHERE id = ?",
             (ts, session_id),
         )
-        self.conn.commit()
+        if time.monotonic() - self._last_commit_time >= self._FLUSH_INTERVAL:
+            self.flush()
         return event_id
 
     def get_session_events(self, session_id: str) -> list[sqlite3.Row]:

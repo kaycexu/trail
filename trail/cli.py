@@ -389,8 +389,7 @@ def main(argv: list[str] | None = None) -> int:
             else float(get_config_value(config, "watch.settle_seconds", 1.0))
         )
 
-    db = TrailDB()
-    try:
+    with TrailDB() as db:
         if args.command == "wrap":
             return run_wrapped(db, args.tool, args.args)
         if args.command == "codex":
@@ -411,6 +410,4 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_rebuild(db, args)
         if args.command == "reindex":
             return cmd_reindex(db, args)
-    finally:
-        db.close()
     return 0
