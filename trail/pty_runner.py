@@ -295,7 +295,10 @@ def run_wrapped(db: TrailDB, tool: str, tool_args: list[str]) -> int:
             if stdin_open:
                 read_fds.append(stdin_fd)
 
-            ready, _, _ = select.select(read_fds, [], [], 0.1)
+            try:
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+            except InterruptedError:
+                continue
             if stdin_fd in ready and stdin_open:
                 data = os.read(stdin_fd, 4096)
                 if data:

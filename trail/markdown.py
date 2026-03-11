@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from trail.paths import transcript_path
-from trail.redact import compact_text
+from trail.formatting import _format_session_duration, _format_turn_label, _now_iso, _session_preview
+from trail.paths import metadata_path, transcript_path
 from trail.types import SessionRow
 
 TRANSCRIPT_SCHEMA_VERSION = "trail_session/v1"
@@ -46,6 +46,7 @@ def render_session_markdown(session: SessionRow, turns: list[dict], *, parser_re
     lines.append(f"cwd: {_yaml_string(session['cwd'])}")
     lines.append(f"branch: {_yaml_string(session['git_branch'])}")
     lines.append(f"raw_log_path: {_yaml_string(session['raw_log_path'])}")
+    lines.append(f"metadata_path: {_yaml_string(str(metadata_path(session)))}")
     preview = _session_preview(turns)
     lines.append(f"preview: {_yaml_string(preview)}")
     lines.append("---")
@@ -62,6 +63,7 @@ def render_session_markdown(session: SessionRow, turns: list[dict], *, parser_re
     lines.append(f"- CWD: {session['cwd']}")
     lines.append(f"- Branch: {session['git_branch'] or '-'}")
     lines.append(f"- Raw Log: {session['raw_log_path']}")
+    lines.append(f"- Metadata: {metadata_path(session)}")
 
     if preview:
         lines.append(f"- Preview: {preview}")
@@ -92,44 +94,8 @@ def render_session_markdown(session: SessionRow, turns: list[dict], *, parser_re
     return "\n".join(lines)
 
 
-def _format_turn_label(role: str, tool: str) -> str:
-    if role == "user":
-        return "You"
-    if tool == "claude":
-        return "Claude"
-    return role.capitalize()
-
-
 def _format_turn_time(ts: str) -> str:
     return ts
-
-
-def _session_preview(turns) -> str:
-    if not turns:
-        return ""
-    for turn in turns:
-        text = compact_text(turn["text_redacted"], 120)
-        if text:
-            return text
-    return ""
-
-
-def _format_session_duration(started_at: str, ended_at: str | None) -> str:
-    if not ended_at:
-        return "-"
-    try:
-        start = datetime.fromisoformat(started_at)
-        end = datetime.fromisoformat(ended_at)
-    except ValueError:
-        return "-"
-    seconds = max(0, int((end - start).total_seconds()))
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, rem = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m{rem:02d}s"
-    hours, rem_minutes = divmod(minutes, 60)
-    return f"{hours}h{rem_minutes:02d}m"
 
 
 def _session_date(ts: str | None) -> str:
@@ -147,10 +113,6 @@ def _session_week(ts: str | None) -> str:
         return ""
     iso_year, iso_week, _ = dt.isocalendar()
     return f"{iso_year}-W{iso_week:02d}"
-
-
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _yaml_string(text: str | None) -> str:

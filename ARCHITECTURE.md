@@ -18,6 +18,8 @@ Trail v0 不是：
 - shell history 增强器
 - 全终端录制器
 - 全桌面输入层
+- 全局终端监听器
+- 系统级键盘采集器
 
 Trail v0 是：
 
@@ -29,6 +31,13 @@ Trail v0 是：
 - 我在 Codex 里问过什么
 - 哪轮 Claude 会话是在这个 repo 里完成的
 - 今天哪些 prompt 真的解决了问题
+
+这条边界是明确决策，不是“以后也许会补”：
+
+- 不做全局终端监听
+- 不做 shell 后台偷录
+- 不做桌面级输入捕获
+- 不把 Trail 做成通用 terminal recorder
 
 ## 3. v0 技术栈
 
@@ -148,6 +157,14 @@ claude() { command trail wrap claude "$@"; }
 - 一轮会话内部发生了什么
 
 PTY wrapper 能拿到完整交互字节流，而且不需要系统级权限。这是当前场景下最合适的入口。
+
+反过来说，我们也明确不走这些路：
+
+- 不尝试 hook 所有 shell 命令来推断交互内容
+- 不尝试做系统级 terminal sniffing
+- 不尝试用辅助功能权限采集全局输入
+
+因为一旦走到这一步，Trail 的隐私模型、session 边界和噪音水平都会恶化，产品就不再是当前这个“显式包装的 AI CLI 会话记忆层”。
 
 ## 7. 事件流模型
 
@@ -270,10 +287,19 @@ Trail 必须尽量不破坏这些行为：
 ```text
 ~/.trail/
 ├── trail.db
-└── sessions/
-    ├── <session-id>.jsonl
-    └── ...
+├── config.json
+├── sessions/
+│   ├── <session-id>.jsonl
+│   └── ...
+└── transcripts/
+    └── YYYY-MM-DD/
+        ├── HHMMSS--<tool>--<session-id>.md
+        └── HHMMSS--<tool>--<session-id>.metadata.json
 ```
+
+- `config.json` — 用户配置，由 `trail config init` 或 `install.sh` 生成
+- `transcripts/YYYY-MM-DD/` — 按日期分目录存放 Markdown 转录和 metadata.json 伴生文件
+- `metadata.json` — 每个会话的结构化元数据（计数、活动、URL 等），与同名 `.md` 文件成对出现
 
 ### sessions
 
@@ -392,7 +418,7 @@ trail wrap claude
 ### `trail init zsh`
 
 - 输出包装函数到终端
-- 第一版不自动改 `.zshrc`
+- `install.sh` 会自动在 `.zshrc` 中插入 PATH 导出和 `codex`/`claude` 包装函数（带 `# >>> trail ... >>>` / `# <<< trail ... <<<` 标记，支持幂等更新）
 
 ## 14. 目录建议
 
@@ -402,12 +428,22 @@ trail/
 ├── ARCHITECTURE.md
 ├── todo.md
 ├── pyproject.toml
+├── install.sh
 ├── trail/
 │   ├── __init__.py
-│   ├── cli.py
-│   ├── db.py
-│   ├── pty_runner.py
-│   ├── redact.py
+│   ├── cli.py                  # CLI 入口与子命令注册
+│   ├── db.py                   # SQLite + FTS5 数据库封装
+│   ├── pty_runner.py           # PTY 代理运行时
+│   ├── redact.py               # 敏感信息打码
+│   ├── claude_heuristics.py    # 共享 Claude 解析启发式规则（正则、噪声检测、action 识别）
+│   ├── line_buffer.py          # 终端行编辑模拟（submitted_input_only 模式）
+│   ├── markdown.py             # Markdown 转录文件生成
+│   ├── metadata.py             # 会话元数据 JSON 伴生文件生成
+│   ├── types.py                # TypedDict 类型定义（SessionRow、EventRow 等）
+│   ├── config.py               # 配置文件管理（加载、合并、读写 ~/.trail/config.json）
+│   ├── doctor.py               # 安装健康检查（trail doctor）
+│   ├── watch.py                # 实时会话监控（trail watch）
+│   ├── paths.py                # 路径管理（trail_home、sessions_dir、transcripts_dir 等）
 │   ├── adapters/
 │   │   ├── __init__.py
 │   │   ├── base.py
@@ -422,7 +458,67 @@ trail/
 └── tests/
 ```
 
-## 15. 风险点
+## 15. 配置参数说明
+
+配置文件路径：`~/.trail/config.json`，由 `trail config init` 生成，缺失时使用默认值。
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `watch.mode` | string | `"turns"` | 监控模式（`trail watch` 的输出粒度） |
+| `watch.poll_interval` | float | `0.5` | 轮询间隔秒数 |
+| `watch.settle_seconds` | float | `1.0` | turn 稳定等待秒数（判断一轮输出是否结束） |
+| `capture.submitted_input_only.claude` | bool | `true` | Claude 适配器是否只记录已提交的输入（过滤行编辑中间态） |
+| `markdown.sync_interval_seconds` | float | `2.0` | Markdown 转录文件同步写盘间隔 |
+
+用户可通过 `trail config set <key> <value>` 修改单项，或直接编辑 JSON 文件。加载时会将用户配置与默认值深度合并，缺失字段自动回退默认值。
+
+## 16. metadata.json 格式
+
+每个会话的 Markdown 转录文件旁会生成同名 `.metadata.json` 伴生文件，包含该会话的结构化元数据。
+
+```json
+{
+  "kind": "trail_session_metadata",
+  "schema_version": "trail_session_metadata/v1",
+  "metadata_revision": 1,
+  "session_id": "<session-id>",
+  "tool": "claude",
+  "status": "completed | active",
+  "started_at": "ISO8601",
+  "ended_at": "ISO8601 | null",
+  "last_synced_at": "ISO8601",
+  "artifacts": {
+    "raw_log_path": "~/.trail/sessions/<session-id>.jsonl",
+    "transcript_path": "~/.trail/transcripts/YYYY-MM-DD/....md",
+    "metadata_path": "~/.trail/transcripts/YYYY-MM-DD/....metadata.json"
+  },
+  "counts": {
+    "events": 123,
+    "turns": 10,
+    "streams": { "stdin": 50, "stdout": 70, "meta": 3 },
+    "event_types": { "text": 118, "start": 1, "end": 1 },
+    "events_by_channel": { "stdin/text": 50, "stdout/text": 68 },
+    "turns_by_role": { "user": 5, "assistant": 5 },
+    "meta_events": 3,
+    "activities": 8,
+    "urls": 2
+  },
+  "meta_events": [ { "seq": 0, "ts": "...", "event_type": "start", "payload": {} } ],
+  "activities": [ { "seq": 10, "ts": "...", "stream": "stdout", "kind": "command", "text": "Ran ls -la", "command": "ls -la" } ],
+  "urls": [ { "first_seen_at": "...", "stream": "stdout", "url": "https://..." } ]
+}
+```
+
+字段说明：
+
+- `status` — `"completed"`（会话已结束）或 `"active"`（会话进行中）
+- `artifacts` — 关联文件路径（原始日志、转录、元数据）
+- `counts` — 各维度计数统计
+- `meta_events` — 会话生命周期事件（start/end 等）
+- `activities` — 从输出中提取的工具调用活动（搜索、命令执行、文件读写等）
+- `urls` — 会话中出现的 URL 列表
+
+## 17. 风险点
 
 ### 最容易低估的点
 
@@ -440,7 +536,7 @@ trail/
 - 云同步
 - shell hook 全覆盖
 
-## 16. 第一版成败标准
+## 18. 第一版成败标准
 
 - 用户愿意用 `trail codex` / `trail claude` 代替直接启动
 - 会话体验没有明显变差

@@ -11,10 +11,14 @@ SENSITIVE_PATTERNS = [
     re.compile(r"(?i)\b((?:token|password|cookie|authorization|api[_-]?key)\s*=\s*)([^\s\"']+)"),
     re.compile(r"(?i)(--(?:token|password|cookie|authorization|api-key)\s+)([^\s]+)"),
     re.compile(r"(?i)(Bearer\s+)([A-Za-z0-9._\-+/=]+)"),
-    re.compile(r"()(sk-[a-zA-Z0-9]{20,})"),
+    re.compile(r"()(sk-(?:proj-)?[a-zA-Z0-9_-]{20,})"),
+    re.compile(r"()(sk-ant-[a-zA-Z0-9_-]{20,})"),
+    re.compile(r"()(AKIA[0-9A-Z]{16})"),
     re.compile(r"()(ghp_[a-zA-Z0-9]{36,})"),
     re.compile(r"()(gho_[a-zA-Z0-9]{36,})"),
     re.compile(r"()(ghs_[a-zA-Z0-9]{36,})"),
+    re.compile(r"()(github_pat_[a-zA-Z0-9_]{20,})"),
+    re.compile(r"()(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})"),
     re.compile(r"()(xoxb-[a-zA-Z0-9-]+)"),
     re.compile(r"()(xoxp-[a-zA-Z0-9-]+)"),
     re.compile(r"()(xapp-[a-zA-Z0-9-]+)"),
@@ -34,13 +38,13 @@ def strip_ansi(text: str) -> str:
 
 
 def clean_text_for_storage(text: str, stream: str) -> str:
-    redacted = redact_sensitive_text(text)
-    cleaned = strip_ansi(redacted)
+    cleaned = strip_ansi(text)
+    redacted = redact_sensitive_text(cleaned)
 
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    redacted = redacted.replace("\r\n", "\n").replace("\r", "\n")
 
     allowed = []
-    for char in cleaned:
+    for char in redacted:
         if char in ("\n", "\t"):
             allowed.append(char)
             continue

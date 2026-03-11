@@ -33,8 +33,8 @@
 - [x] 实现 `trail day`
 - [x] 实现 `trail rebuild`
 - [x] 实现 `trail reindex`
-- [ ] 处理窗口 resize
-- [ ] 处理 `Ctrl-C`
+- [x] 处理窗口 resize
+- [x] 处理 `Ctrl-C`
 
 ## P2：产品感
 

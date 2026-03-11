@@ -1,5 +1,19 @@
 # Trail
 
+> Session memory layer for AI CLI tools. Record, search, and replay your Claude Code / Codex conversations as searchable Markdown transcripts.
+
+**Trail** is a PTY wrapper that transparently records AI CLI sessions into `~/.trail/transcripts/`, making ephemeral terminal conversations persistent and searchable. Zero external dependencies — stdlib only.
+
+- 🔍 Full-text search across all past sessions
+- 📝 Markdown transcripts organized by date
+- 🔒 Automatic secret redaction (API keys, tokens, passwords)
+- 🛠 `trail doctor` for installation health checks
+- 👀 `trail watch` for live session monitoring
+
+---
+
+# Trail
+
 Trail 是一个面向 `Codex`、`Claude Code` 等 AI CLI 的会话记忆层：通过 PTY wrapper 显式代理交互会话，把本地会话稳定沉淀成 markdown transcript。它的核心不是做一个很重的产品层，而是把资料记录好，让人和 agent 都能直接读取 `~/.trail/transcripts/`。
 
 ## 它解决什么问题
@@ -21,6 +35,13 @@ Trail 要解决的是这部分“会话记忆”，不是命令历史增强。
 ## 第一版范围
 
 第一版只做显式包装的 AI CLI 会话，不做全局终端监听，不做全桌面输入，不做 OCR，不做云同步，不做 GUI。
+
+这不是“暂时没做”，而是当前产品边界：
+
+- 不做全局终端监听
+- 不做 shell 级后台偷录
+- 不做桌面级输入捕获
+- 不把 Trail 扩成通用 terminal recorder
 
 MVP 包含：
 
@@ -65,6 +86,22 @@ MVP 包含：
 一句话差异：
 
 `script 在录屏幕，Trail 在记会话。`
+
+## 明确不做
+
+下面这些方向当前明确不做：
+
+- 全局终端监听
+- 所有 shell 命令的统一录制
+- 非 AI CLI 程序的通用 TUI 抓取
+- 桌面输入法、辅助功能或系统级键盘事件采集
+
+原因也很直接：
+
+- 会破坏 `显式 opt-in` 的隐私模型
+- 会让 session 边界变得模糊
+- 会把大量非 AI 噪音混进存储层
+- 会把 Trail 从“AI CLI 会话记忆层”变成另一个产品
 
 ## 当前技术判断
 
@@ -148,6 +185,7 @@ source ~/.zshrc
 之后你就按平常方式用：
 
 ```bash
+codex
 claude
 ```
 

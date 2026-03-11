@@ -17,12 +17,12 @@ from trail.config import (
     unset_config_value,
 )
 from trail.db import TrailDB
+from trail.formatting import _format_session_duration, _format_turn_label, _session_preview
 from trail.doctor import format_doctor_report, run_doctor
-from trail.paths import transcript_path
+from trail.paths import metadata_path, transcript_path
 from trail.parser import rebuild_session_turns
 from trail.pty_runner import run_wrapped
 from trail.redact import compact_text
-from trail.types import TurnRow
 from trail.watch import watch_session
 
 
@@ -198,6 +198,7 @@ def cmd_show(db: TrailDB, args) -> int:
     print(f"Branch   {session['git_branch'] or '-'}")
     print(f"Log      {session['raw_log_path']}")
     print(f"Markdown {transcript_path(session)}")
+    print(f"Metadata {metadata_path(session)}")
     print(f"Bytes    in={session['bytes_in']} out={session['bytes_out']}")
     if preview:
         print(f"Preview  {preview}")
@@ -298,16 +299,6 @@ def cmd_reindex(db: TrailDB, args) -> int:
     return 0
 
 
-def _format_turn_label(role: str, tool: str) -> str:
-    if role == "user":
-        return "You"
-    if tool == "claude":
-        return "Claude"
-    if tool == "codex":
-        return "Codex"
-    return role.capitalize()
-
-
 def _format_turn_time(ts: str) -> str:
     if "T" in ts and len(ts) >= 19:
         return ts[11:19]
@@ -338,34 +329,6 @@ def _print_raw_events(db: TrailDB, session_id: str, *, limit: int | None = None)
         indent = " " * (len(prefix) + 1)
         for line in lines[1:]:
             print(f"{indent}{line}")
-
-
-def _session_preview(turns: list[TurnRow]) -> str:
-    if not turns:
-        return ""
-    for turn in turns:
-        text = compact_text(turn["text_redacted"], 120)
-        if text:
-            return text
-    return ""
-
-
-def _format_session_duration(started_at: str, ended_at: str | None) -> str:
-    if not ended_at:
-        return "-"
-    try:
-        start = datetime.fromisoformat(started_at)
-        end = datetime.fromisoformat(ended_at)
-    except ValueError:
-        return "-"
-    seconds = max(0, int((end - start).total_seconds()))
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, rem = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m{rem:02d}s"
-    hours, rem_minutes = divmod(minutes, 60)
-    return f"{hours}h{rem_minutes:02d}m"
 
 
 def main(argv: list[str] | None = None) -> int:

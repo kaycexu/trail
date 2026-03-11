@@ -11,16 +11,11 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
+from trail.formatting import now_iso
 from trail.paths import db_path, ensure_trail_home
 from trail.types import EventRow, SessionRow, TurnRow
 
 log = logging.getLogger("trail.db")
-
-
-def now_iso() -> str:
-    from datetime import datetime
-
-    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 @dataclass
@@ -318,10 +313,25 @@ class TrailDB:
         return self.conn.execute(query, params).fetchall()
 
     def get_session(self, session_id: str) -> Optional[SessionRow]:
-        return self.conn.execute(
+        session = self.conn.execute(
             "SELECT * FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
+        if session is not None:
+            return session
+        matches = self.conn.execute(
+            """
+            SELECT *
+            FROM sessions
+            WHERE id LIKE ?
+            ORDER BY started_at DESC
+            LIMIT 2
+            """,
+            (f"{session_id}%",),
+        ).fetchall()
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def get_latest_session(
         self,
@@ -374,6 +384,8 @@ class TrailDB:
     def search_turns(self, query_text: str, *, limit: int = 20, role: Optional[str] = None,
                      tool: Optional[str] = None, repo: Optional[str] = None,
                      since: Optional[str] = None) -> list[sqlite3.Row]:  # joined query, not a pure TurnRow
+        if not query_text.strip():
+            return []
         query = """
             SELECT
                 turns.session_id,
@@ -388,7 +400,7 @@ class TrailDB:
             JOIN sessions ON sessions.id = turns.session_id
             WHERE turns_fts MATCH ?
         """
-        params: list[object] = [query_text]
+        params: list[object] = [_build_literal_fts_query(query_text)]
         if role and role != "all":
             query += " AND turns.role = ?"
             params.append(role)
@@ -459,3 +471,15 @@ class TrailDB:
             query += " AND (repo_root LIKE ? OR cwd LIKE ?)"
             params.extend([like, like])
         return query, params
+
+
+def _build_literal_fts_query(query_text: str) -> str:
+    tokens = [token for token in query_text.split() if token]
+    if not tokens:
+        return '""'
+    return " ".join(_quote_fts_token(token) for token in tokens)
+
+
+def _quote_fts_token(token: str) -> str:
+    escaped = token.replace('"', '""')
+    return f'"{escaped}"'
